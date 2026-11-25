@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Mi Theremin Etéreo</title>
-  
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
   <style>
@@ -40,8 +39,8 @@
     }
 
     #btn-iniciar {
-      margin-top: 20px;
-      padding: 16px 32px;
+      margin-top: 15px;
+      padding: 18px 36px;
       font-size: 18px;
       font-weight: bold;
       color: #090a16;
@@ -50,14 +49,20 @@
       border-radius: 30px;
       cursor: pointer;
       box-shadow: 0 0 20px rgba(100, 255, 218, 0.4);
+      z-index: 10;
     }
 
-    #estado {
-      margin-top: 15px;
+    #debug {
+      margin-top: 25px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 12px 18px;
+      border-radius: 8px;
       font-size: 14px;
-      color: #ff7b72;
+      font-family: monospace;
+      color: #64ffda;
+      pointer-events: none;
       text-align: center;
-      padding: 0 20px;
+      max-width: 85vw;
     }
 
     #luz {
@@ -78,10 +83,10 @@
   <div id="pad">
     <div id="texto-ayuda">
       <h2>Theremin Etéreo</h2>
-      <p id="instruccion">Pulsa el botón para activar el sonido</p>
+      <p id="instruccion">Sube el volumen multimedia y quita el silencio físico (si es iPhone)</p>
     </div>
     <button id="btn-iniciar">Activar Sonido</button>
-    <div id="estado"></div>
+    <div id="debug">Estado: Esperando botón...</div>
     <div id="luz"></div>
   </div>
 
@@ -90,7 +95,7 @@
     const luz = document.getElementById("luz");
     const btnIniciar = document.getElementById("btn-iniciar");
     const instruccion = document.getElementById("instruccion");
-    const estado = document.getElementById("estado");
+    const debug = document.getElementById("debug");
 
     let sinte, filtro, eco, reverb;
     let audioListo = false;
@@ -103,41 +108,45 @@
       "C5", "Eb5", "F5", "G5", "Bb5", "C6"
     ];
 
-    // Verificamos si el celular dejó cargar Tone.js
+    function actualizarDebug(extra = "") {
+      const estadoAudio = typeof Tone !== "undefined" ? Tone.context.state : "Sin Tone.js";
+      debug.textContent = `Audio: ${estadoAudio} | Tocando: ${tocando ? "SÍ" : "NO"} | Nota: ${notaActual || "-"} ${extra}`;
+    }
+
     if (typeof Tone === "undefined") {
-      estado.textContent = "Error: No se pudo cargar el motor de audio (Tone.js). Abre este archivo desde Chrome/Safari con internet, no desde un visor de archivos.";
+      debug.textContent = "ERROR: No cargó Tone.js. Revisa tu conexión.";
       btnIniciar.style.display = "none";
     }
 
-    // 1. Botón explícito para desbloquear el audio en celulares
     btnIniciar.addEventListener("click", async (e) => {
-      e.stopPropagation(); // Evita que dispare otros eventos del pad
+      e.stopPropagation();
       try {
-        btnIniciar.textContent = "Cargando...";
         await Tone.start();
         await Tone.context.resume();
 
         if (!sinte) {
           sinte = new Tone.Synth({
             oscillator: { type: "fattriangle", count: 3, spread: 25 },
-            envelope: { attack: 0.4, decay: 0.5, sustain: 0.8, release: 2.5 },
+            envelope: { attack: 0.2, decay: 0.5, sustain: 0.8, release: 2.0 },
             portamento: 0.12
           });
 
-          filtro = new Tone.Filter(800, "lowpass");
-          eco = new Tone.PingPongDelay({ delayTime: "8n.", feedback: 0.55, wet: 0.4 });
-          reverb = new Tone.Reverb({ decay: 5, wet: 0.6 });
-          await reverb.ready;
+          filtro = new Tone.Filter(1200, "lowpass");
+          eco = new Tone.PingPongDelay({ delayTime: "8n.", feedback: 0.5, wet: 0.35 });
+          reverb = new Tone.JCReverb(0.75);
 
           sinte.chain(filtro, eco, reverb, Tone.Destination);
         }
 
+        // 0.4 como número (sin comillas)
+        sinte.triggerAttackRelease("C4", 0.4);
+
         audioListo = true;
         btnIniciar.style.display = "none";
-        estado.textContent = "";
-        instruccion.innerHTML = "¡Listo! Desliza el dedo por la pantalla.<br>(Si usas iPhone, quita el modo silencio físico)";
+        instruccion.textContent = "¡Desliza el dedo por la pantalla!";
+        actualizarDebug("| Prueba enviada");
       } catch (err) {
-        estado.textContent = "Error al iniciar audio: " + err.message;
+        debug.textContent = "ERROR: " + err.message;
       }
     });
 
@@ -159,19 +168,20 @@
         notaActual = nuevaNota;
       }
 
-      const frecuenciaFiltro = 200 + (porcentajeY * 3300);
+      const frecuenciaFiltro = 250 + (porcentajeY * 3500);
       filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
 
       luz.style.left = x + "px";
       luz.style.top = y + "px";
+      actualizarDebug();
     }
 
     pad.addEventListener("pointerdown", (e) => {
       if (!audioListo) return;
-      document.getElementById("texto-ayuda").style.opacity = "0.2";
       luz.style.display = "block";
       actualizarSonido(e.clientX, e.clientY);
       tocando = true;
+      actualizarDebug();
     });
 
     pad.addEventListener("pointermove", (e) => {
@@ -179,12 +189,13 @@
       actualizarSonido(e.clientX, e.clientY);
     });
 
-    function detener() {
+    function detener(e) {
       if (!tocando) return;
       tocando = false;
       notaActual = "";
       sinte.triggerRelease();
       luz.style.display = "none";
+      actualizarDebug(`| Soltado`);
     }
 
     pad.addEventListener("pointerup", detener);
