@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mi Theremin Etéreo</title>
+  
+  <!-- Cargamos Tone.js: es la librería que fabrica el sonido -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background-color: #090a16;
+      color: #a8b2d1;
+      font-family: sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Esta es toda la zona donde vamos a tocar */
+    #pad {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      touch-action: none; /* Evita que la pantalla se mueva en celulares */
+      cursor: crosshair;
+      background: radial-gradient(circle at center, #161b33 0%, #090a16 100%);
+    }
+
+    #texto-ayuda {
+      text-align: center;
+      pointer-events: none;
+    }
+
+    /* El punto luminoso que sigue al dedo/mouse */
+    #luz {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(100, 255, 218, 0.8);
+      box-shadow: 0 0 30px 15px rgba(100, 255, 218, 0.4);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="pad">
+    <div id="texto-ayuda">
+      <h2>Theremin Etéreo</h2>
+      <p>Haz clic y arrastra (o desliza el dedo)<br>Izquierda/Derecha = Nota | Arriba/Abajo = Brillo</p>
+    </div>
+    <div id="luz"></div>
+  </div>
+
+  <script>
+    // --- 1. CONFIGURAR EL SONIDO (Estilo Ethereal Dialpad) ---
+    
+    // El sintetizador: "fattriangle" suma varias ondas suaves ligeramente desafinadas
+    const sinte = new Tone.Synth({
+      oscillator: {
+        type: "fattriangle",
+        count: 3,      // 3 voces a la vez (efecto coro/pad)
+        spread: 25     // Qué tan separadas están las voces
+      },
+      envelope: {
+        attack: 0.4,   // El sonido entra suave
+        decay: 0.5,
+        sustain: 0.8,
+        release: 2.5   // Al soltar, el sonido queda flotando 2.5 segundos
+      },
+      portamento: 0.12 // Deslizamiento suave entre notas (efecto theremin)
+    });
+
+    // Filtro: permite hacer el sonido más oscuro o más brillante
+    const filtro = new Tone.Filter(800, "lowpass");
+
+    // Efecto de eco espacial (PingPongDelay)
+    const eco = new Tone.PingPongDelay({
+      delayTime: "8n.",
+      feedback: 0.55,
+      wet: 0.4
+    });
+
+    // Efecto de catedral/espacio (Reverb)
+    const reverb = new Tone.Reverb({
+      decay: 6,
+      wet: 0.6
+    });
+
+    // Conectamos todo en cadena: Sinte -> Filtro -> Eco -> Reverb -> Parlantes
+    sinte.chain(filtro, eco, reverb, Tone.Destination);
+
+
+    // --- 2. ESCALA MUSICAL (Para que siempre suene afinado y soñador) ---
+    // Escala pentatónica menor de Do en varias octavas
+    const notas = [
+      "C3", "Eb3", "F3", "G3", "Bb3",
+      "C4", "Eb4", "F4", "G4", "Bb4",
+      "C5", "Eb5", "F5", "G5", "Bb5", "C6"
+    ];
+
+
+    // --- 3. INTERACCIÓN CON LA PANTALLA ---
+    const pad = document.getElementById("pad");
+    const luz = document.getElementById("luz");
+    const textoAyuda = document.getElementById("texto-ayuda");
+
+    let tocando = false;
+    let notaActual = "";
+
+    // Función para traducir la posición (X, Y) en Nota y Brillo
+    function actualizarSonido(x, y) {
+      // Calculamos porcentajes de 0.0 a 1.0 según el tamaño de la pantalla
+      const porcentajeX = Math.max(0, Math.min(1, x / window.innerWidth));
+      const porcentajeY = Math.max(0, Math.min(1, 1 - (y / window.innerHeight))); // Invertido: arriba es 1, abajo es 0
+
+      // Elegimos la nota según la posición horizontal (X)
+      const indice = Math.floor(porcentajeX * (notas.length - 1));
+      const nuevaNota = notas[indice];
+
+      // Cambiamos la nota solo si es distinta a la que ya suena
+      if (nuevaNota !== notaActual) {
+        if (!tocando) {
+          sinte.triggerAttack(nuevaNota);
+        } else {
+          sinte.setNote(nuevaNota);
+        }
+        notaActual = nuevaNota;
+      }
+
+      // Cambiamos el brillo del filtro según la altura (Y): entre 200 Hz y 3500 Hz
+      const frecuenciaFiltro = 200 + (porcentajeY * 3300);
+      filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
+
+      // Movemos la luz visual
+      luz.style.left = x + "px";
+      luz.style.top = y + "px";
+    }
+
+    // Al presionar el mouse o tocar la pantalla
+    pad.addEventListener("pointerdown", async (e) => {
+      await Tone.start(); // Los navegadores exigen un clic para activar el audio
+      textoAyuda.style.display = "none";
+      luz.style.display = "block";
+      
+      actualizarSonido(e.clientX, e.clientY);
+      tocando = true;
+    });
+
+    // Al mover el mouse o el dedo mientras está presionado
+    pad.addEventListener("pointermove", (e) => {
+      if (!tocando) return;
+      actualizarSonido(e.clientX, e.clientY);
+    });
+
+    // Al soltar
+    function detener() {
+      if (!tocando) return;
+      tocando = false;
+      notaActual = "";
+      sinte.triggerRelease();
+      luz.style.display = "none";
+    }
+
+    pad.addEventListener("pointerup", detener);
+    pad.addEventListener("pointerleave", detener);
+    pad.addEventListener("pointercancel", detener);
+  </script>
+</body>
+</html>
