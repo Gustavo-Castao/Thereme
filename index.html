@@ -52,26 +52,13 @@
       z-index: 10;
     }
 
-    #debug {
-      margin-top: 25px;
-      background: rgba(0, 0, 0, 0.7);
-      padding: 12px 18px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-family: monospace;
-      color: #64ffda;
-      pointer-events: none;
-      text-align: center;
-      max-width: 85vw;
-    }
-
     #luz {
       position: absolute;
-      width: 50px;
-      height: 50px;
+      width: 55px;
+      height: 55px;
       border-radius: 50%;
-      background: rgba(100, 255, 218, 0.8);
-      box-shadow: 0 0 30px 15px rgba(100, 255, 218, 0.4);
+      background: rgba(100, 255, 218, 0.75);
+      box-shadow: 0 0 35px 15px rgba(100, 255, 218, 0.35);
       transform: translate(-50%, -50%);
       pointer-events: none;
       display: none;
@@ -83,10 +70,9 @@
   <div id="pad">
     <div id="texto-ayuda">
       <h2>Theremin Etéreo</h2>
-      <p id="instruccion">Sube el volumen multimedia y quita el silencio físico (si es iPhone)</p>
+      <p id="instruccion">Pulsa el botón para activar el sonido</p>
     </div>
     <button id="btn-iniciar">Activar Sonido</button>
-    <div id="debug">Estado: Esperando botón...</div>
     <div id="luz"></div>
   </div>
 
@@ -95,9 +81,8 @@
     const luz = document.getElementById("luz");
     const btnIniciar = document.getElementById("btn-iniciar");
     const instruccion = document.getElementById("instruccion");
-    const debug = document.getElementById("debug");
 
-    let sinte, filtro, eco, reverb;
+    let sinte, filtro, eco, reverb, limitador;
     let audioListo = false;
     let tocando = false;
     let notaActual = "";
@@ -108,46 +93,56 @@
       "C5", "Eb5", "F5", "G5", "Bb5", "C6"
     ];
 
-    function actualizarDebug(extra = "") {
-      const estadoAudio = typeof Tone !== "undefined" ? Tone.context.state : "Sin Tone.js";
-      debug.textContent = `Audio: ${estadoAudio} | Tocando: ${tocando ? "SÍ" : "NO"} | Nota: ${notaActual || "-"} ${extra}`;
-    }
-
-    if (typeof Tone === "undefined") {
-      debug.textContent = "ERROR: No cargó Tone.js. Revisa tu conexión.";
-      btnIniciar.style.display = "none";
-    }
-
     btnIniciar.addEventListener("click", async (e) => {
       e.stopPropagation();
-      try {
-        await Tone.start();
-        await Tone.context.resume();
+      await Tone.start();
+      await Tone.context.resume();
 
-        if (!sinte) {
-          sinte = new Tone.Synth({
-            oscillator: { type: "fattriangle", count: 3, spread: 25 },
-            envelope: { attack: 0.2, decay: 0.5, sustain: 0.8, release: 2.0 },
-            portamento: 0.12
-          });
+      if (!sinte) {
+        sinte = new Tone.Synth({
+          volume: -14, // Bajamos la potencia de entrada para que NO sature
+          oscillator: {
+            type: "fattriangle",
+            count: 3,
+            spread: 20
+          },
+          envelope: {
+            attack: 0.35,
+            decay: 0.5,
+            sustain: 0.8,
+            release: 2.5
+          },
+          portamento: 0.12
+        });
 
-          filtro = new Tone.Filter(1200, "lowpass");
-          eco = new Tone.PingPongDelay({ delayTime: "8n.", feedback: 0.5, wet: 0.35 });
-          reverb = new Tone.JCReverb(0.75);
+        // Filtro más suave (Q: 0.7 evita resonancias chillonas)
+        filtro = new Tone.Filter({
+          frequency: 900,
+          type: "lowpass",
+          Q: 0.7
+        });
 
-          sinte.chain(filtro, eco, reverb, Tone.Destination);
-        }
+        eco = new Tone.PingPongDelay({
+          delayTime: "8n.",
+          feedback: 0.45,
+          wet: 0.35
+        });
 
-        // 0.4 como número (sin comillas)
-        sinte.triggerAttackRelease("C4", 0.4);
+        // Reverb de catedral suave (sin 'await' para que nunca trabe el celular)
+        reverb = new Tone.Reverb({
+          decay: 5,
+          wet: 0.55
+        });
 
-        audioListo = true;
-        btnIniciar.style.display = "none";
-        instruccion.textContent = "¡Desliza el dedo por la pantalla!";
-        actualizarDebug("| Prueba enviada");
-      } catch (err) {
-        debug.textContent = "ERROR: " + err.message;
+        // Limitador de seguridad para evitar cualquier saturación
+        limitador = new Tone.Limiter(-3);
+
+        sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
       }
+
+      audioListo = true;
+      btnIniciar.style.display = "none";
+      instruccion.textContent = "Desliza el dedo o mouse (Izq/Der = Nota | Arriba/Abajo = Brillo)";
     });
 
     function actualizarSonido(x, y) {
@@ -168,20 +163,20 @@
         notaActual = nuevaNota;
       }
 
-      const frecuenciaFiltro = 250 + (porcentajeY * 3500);
+      // Brillo entre 200 Hz (cálido/oscuro) y 2400 Hz (brillante sin chillar)
+      const frecuenciaFiltro = 200 + (porcentajeY * 2200);
       filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
 
       luz.style.left = x + "px";
       luz.style.top = y + "px";
-      actualizarDebug();
     }
 
     pad.addEventListener("pointerdown", (e) => {
       if (!audioListo) return;
+      document.getElementById("texto-ayuda").style.opacity = "0.25";
       luz.style.display = "block";
       actualizarSonido(e.clientX, e.clientY);
       tocando = true;
-      actualizarDebug();
     });
 
     pad.addEventListener("pointermove", (e) => {
@@ -189,13 +184,12 @@
       actualizarSonido(e.clientX, e.clientY);
     });
 
-    function detener(e) {
+    function detener() {
       if (!tocando) return;
       tocando = false;
       notaActual = "";
       sinte.triggerRelease();
       luz.style.display = "none";
-      actualizarDebug(`| Soltado`);
     }
 
     pad.addEventListener("pointerup", detener);
