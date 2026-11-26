@@ -52,6 +52,21 @@
       z-index: 10;
     }
 
+    #debug {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: monospace;
+      color: #64ffda;
+      pointer-events: none;
+      text-align: center;
+    }
+
     #luz {
       position: absolute;
       width: 55px;
@@ -76,11 +91,14 @@
     <div id="luz"></div>
   </div>
 
+  <div id="debug">Esperando botón...</div>
+
   <script>
     const pad = document.getElementById("pad");
     const luz = document.getElementById("luz");
     const btnIniciar = document.getElementById("btn-iniciar");
     const instruccion = document.getElementById("instruccion");
+    const debug = document.getElementById("debug");
 
     let sinte, filtro, eco, reverb, limitador;
     let audioListo = false;
@@ -95,54 +113,54 @@
 
     btnIniciar.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await Tone.start();
-      await Tone.context.resume();
+      try {
+        await Tone.start();
+        await Tone.context.resume();
 
-      if (!sinte) {
-        sinte = new Tone.Synth({
-          volume: -14, // Bajamos la potencia de entrada para que NO sature
-          oscillator: {
-            type: "fattriangle",
-            count: 3,
-            spread: 20
-          },
-          envelope: {
-            attack: 0.35,
-            decay: 0.5,
-            sustain: 0.8,
-            release: 2.5
-          },
-          portamento: 0.12
-        });
+        if (!sinte) {
+          sinte = new Tone.Synth({
+            volume: -6, // Volumen equilibrado para no saturar
+            oscillator: {
+              type: "fattriangle",
+              count: 3,
+              spread: 20
+            },
+            envelope: {
+              attack: 0.25,
+              decay: 0.5,
+              sustain: 0.8,
+              release: 2.2
+            },
+            portamento: 0.12
+          });
 
-        // Filtro más suave (Q: 0.7 evita resonancias chillonas)
-        filtro = new Tone.Filter({
-          frequency: 900,
-          type: "lowpass",
-          Q: 0.7
-        });
+          filtro = new Tone.Filter(1000, "lowpass");
 
-        eco = new Tone.PingPongDelay({
-          delayTime: "8n.",
-          feedback: 0.45,
-          wet: 0.35
-        });
+          eco = new Tone.PingPongDelay({
+            delayTime: "8n.",
+            feedback: 0.45,
+            wet: 0.35
+          });
 
-        // Reverb de catedral suave (sin 'await' para que nunca trabe el celular)
-        reverb = new Tone.Reverb({
-          decay: 5,
-          wet: 0.55
-        });
+          // Usamos JCReverb (compatible con todos los celus) pero suavizada al 35%
+          reverb = new Tone.JCReverb(0.45);
+          reverb.wet.value = 0.35;
 
-        // Limitador de seguridad para evitar cualquier saturación
-        limitador = new Tone.Limiter(-3);
+          limitador = new Tone.Limiter(-3);
 
-        sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
+          sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
+        }
+
+        // Nota suave de confirmación
+        sinte.triggerAttackRelease("C4", 0.3);
+
+        audioListo = true;
+        btnIniciar.style.display = "none";
+        instruccion.textContent = "Desliza el dedo (Izq/Der = Nota | Arriba/Abajo = Brillo)";
+        debug.textContent = "Audio: " + Tone.context.state + " | Listo para tocar";
+      } catch (err) {
+        debug.textContent = "ERROR: " + err.message;
       }
-
-      audioListo = true;
-      btnIniciar.style.display = "none";
-      instruccion.textContent = "Desliza el dedo o mouse (Izq/Der = Nota | Arriba/Abajo = Brillo)";
     });
 
     function actualizarSonido(x, y) {
@@ -163,12 +181,12 @@
         notaActual = nuevaNota;
       }
 
-      // Brillo entre 200 Hz (cálido/oscuro) y 2400 Hz (brillante sin chillar)
-      const frecuenciaFiltro = 200 + (porcentajeY * 2200);
+      const frecuenciaFiltro = 250 + (porcentajeY * 2400);
       filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
 
       luz.style.left = x + "px";
       luz.style.top = y + "px";
+      debug.textContent = `Nota: ${notaActual} | Brillo: ${Math.round(frecuenciaFiltro)} Hz`;
     }
 
     pad.addEventListener("pointerdown", (e) => {
@@ -190,6 +208,7 @@
       notaActual = "";
       sinte.triggerRelease();
       luz.style.display = "none";
+      debug.textContent = "En pausa (desliza para tocar)";
     }
 
     pad.addEventListener("pointerup", detener);
