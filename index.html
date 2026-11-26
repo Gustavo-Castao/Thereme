@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Theremin con Cámara</title>
 
-  <!-- Motor de Audio -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
-  <!-- Detector de Manos (MediaPipe Hands) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
   <style>
@@ -23,7 +21,6 @@
       user-select: none;
     }
 
-    /* Video de fondo en modo espejo y muy tenue para guiarte */
     #video {
       position: fixed;
       top: 0;
@@ -31,8 +28,8 @@
       width: 100vw;
       height: 100vh;
       object-fit: cover;
-      transform: scaleX(-1); /* Efecto espejo */
-      opacity: 0.28;
+      transform: scaleX(-1);
+      opacity: 0.25;
       z-index: 1;
       display: none;
     }
@@ -118,6 +115,7 @@
     const debug = document.getElementById("debug");
 
     let sinte, filtro, eco, reverb, limitador;
+    let contextoCreado = false;
     let tocando = false;
     let notaActual = "";
     let ultimoTiempoConMano = 0;
@@ -133,17 +131,17 @@
     function iniciarAudio() {
       if (sinte) return;
       sinte = new Tone.Synth({
-        volume: -6,
-        oscillator: { type: "fattriangle", count: 3, spread: 20 },
-        envelope: { attack: 0.25, decay: 0.5, sustain: 0.8, release: 2.2 },
-        portamento: 0.12
+        volume: -10, // Más suave para evitar cualquier saturación
+        oscillator: { type: "fattriangle", count: 2, spread: 18 },
+        envelope: { attack: 0.3, decay: 0.5, sustain: 0.8, release: 2.2 },
+        portamento: 0.14
       });
 
       filtro = new Tone.Filter(1000, "lowpass");
       eco = new Tone.PingPongDelay({ delayTime: "8n.", feedback: 0.45, wet: 0.35 });
-      reverb = new Tone.JCReverb(0.45);
-      reverb.wet.value = 0.35;
-      limitador = new Tone.Limiter(-3);
+      reverb = new Tone.JCReverb(0.4);
+      reverb.wet.value = 0.3;
+      limitador = new Tone.Limiter(-4);
 
       sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
     }
@@ -161,10 +159,9 @@
         notaActual = nuevaNota;
       }
 
-      const frecuenciaFiltro = 250 + (yNorm * 2400);
-      filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
+      const frecuenciaFiltro = 250 + (yNorm * 2300);
+      filtro.frequency.rampTo(frecuenciaFiltro, 0.08);
 
-      // Posicionar la luz donde está la punta del dedo índice
       luz.style.display = "block";
       luz.style.left = (xNorm * window.innerWidth) + "px";
       luz.style.top = ((1 - yNorm) * window.innerHeight) + "px";
@@ -189,8 +186,8 @@
       });
 
       hands.setOptions({
-        maxNumHands: 1,          // Solo 1 mano para máximo rendimiento en el celu
-        modelComplexity: 0,      // 0 = Modelo liviano (ideal para TCL 40)
+        maxNumHands: 1,
+        modelComplexity: 0,
         minDetectionConfidence: 0.6,
         minTrackingConfidence: 0.5
       });
@@ -205,38 +202,32 @@
 
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
           ultimoTiempoConMano = ahora;
-
-          // El punto 8 es la punta del dedo índice
           const dedo = results.multiHandLandmarks[0][8];
 
-          // Invertimos X (espejo) e Y (arriba = 1, abajo = 0)
           const xNorm = Math.max(0, Math.min(1, 1 - dedo.x));
           const yNorm = Math.max(0, Math.min(1, 1 - dedo.y));
 
           actualizarSonido(xNorm, yNorm);
           tocando = true;
         } else {
-          // Solo cortamos si pasaron más de 300ms sin ver la mano
-          if (tocando && (ahora - ultimoTiempoConMano > 300)) {
+          if (tocando && (ahora - ultimoTiempoConMano > 350)) {
             detenerSonido();
           }
         }
       });
     }
 
-    // --- 3. BUCLE DE VIDEO ---
-    let procesando = false;
+    // --- 3. BUCLE DE VIDEO CON RESPIRO PARA EL PROCESADOR ---
     async function bucleCamara() {
-      if (video.readyState >= 2 && !procesando) {
-        procesando = true;
+      if (video.readyState >= 2) {
         try {
           await hands.send({ image: video });
         } catch (err) {
           debug.textContent = "Error detectando mano: " + err.message;
         }
-        procesando = false;
       }
-      requestAnimationFrame(bucleCamara);
+      // Pausa de 80ms entre análisis para dejar libre la CPU para el audio
+      setTimeout(bucleCamara, 80);
     }
 
     // --- 4. BOTÓN DE INICIO ---
@@ -246,10 +237,17 @@
         btnIniciar.textContent = "Iniciando...";
         debug.textContent = "Activando audio y pidiendo permiso de cámara...";
 
+        // Configuramos buffer estable ("playback") para evitar fritura en Android
+        if (!contextoCreado) {
+          const ctx = new Tone.Context({ latencyHint: "playback" });
+          Tone.setContext(ctx);
+          contextoCreado = true;
+        }
+
         await Tone.start();
         await Tone.context.resume();
         iniciarAudio();
-        sinte.triggerAttackRelease("C4", 0.25); // Sonido de confirmación
+        sinte.triggerAttackRelease("C4", 0.25);
 
         if (typeof Hands === "undefined") {
           throw new Error("No se cargó la librería MediaPipe Hands.");
@@ -257,12 +255,11 @@
 
         iniciarMediaPipe();
 
-        // Pedimos la cámara frontal en baja resolución para que vaya fluido
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "user",
-            width: { ideal: 320 },
-            height: { ideal: 240 }
+            width: { ideal: 240 },
+            height: { ideal: 180 }
           },
           audio: false
         });
