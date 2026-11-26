@@ -115,7 +115,6 @@
     const debug = document.getElementById("debug");
 
     let sinte, filtro, eco, reverb, limitador;
-    let contextoCreado = false;
     let tocando = false;
     let notaActual = "";
     let ultimoTiempoConMano = 0;
@@ -131,10 +130,10 @@
     function iniciarAudio() {
       if (sinte) return;
       sinte = new Tone.Synth({
-        volume: -10, // Más suave para evitar cualquier saturación
+        volume: -10,
         oscillator: { type: "fattriangle", count: 2, spread: 18 },
         envelope: { attack: 0.3, decay: 0.5, sustain: 0.8, release: 2.2 },
-        portamento: 0.14
+        portamento: 0.16
       });
 
       filtro = new Tone.Filter(1000, "lowpass");
@@ -217,7 +216,7 @@
       });
     }
 
-    // --- 3. BUCLE DE VIDEO CON RESPIRO PARA EL PROCESADOR ---
+    // --- 3. BUCLE DE VIDEO CON RESPIRO DE 100ms PARA EL CELU ---
     async function bucleCamara() {
       if (video.readyState >= 2) {
         try {
@@ -226,8 +225,7 @@
           debug.textContent = "Error detectando mano: " + err.message;
         }
       }
-      // Pausa de 80ms entre análisis para dejar libre la CPU para el audio
-      setTimeout(bucleCamara, 80);
+      setTimeout(bucleCamara, 100);
     }
 
     // --- 4. BOTÓN DE INICIO ---
@@ -236,13 +234,6 @@
         btnIniciar.disabled = true;
         btnIniciar.textContent = "Iniciando...";
         debug.textContent = "Activando audio y pidiendo permiso de cámara...";
-
-        // Configuramos buffer estable ("playback") para evitar fritura en Android
-        if (!contextoCreado) {
-          const ctx = new Tone.Context({ latencyHint: "playback" });
-          Tone.setContext(ctx);
-          contextoCreado = true;
-        }
 
         await Tone.start();
         await Tone.context.resume();
