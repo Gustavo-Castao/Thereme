@@ -3,8 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Mi Theremin Etéreo</title>
+  <title>Theremin con Cámara</title>
+
+  <!-- Motor de Audio -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <!-- Detector de Manos (MediaPipe Hands) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
   <style>
     html, body {
@@ -17,30 +21,40 @@
       font-family: sans-serif;
       overflow: hidden;
       user-select: none;
-      -webkit-user-select: none;
-      touch-action: none;
     }
 
-    #pad {
+    /* Video de fondo en modo espejo y muy tenue para guiarte */
+    #video {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      transform: scaleX(-1); /* Efecto espejo */
+      opacity: 0.28;
+      z-index: 1;
+      display: none;
+    }
+
+    #ui {
+      position: relative;
+      z-index: 2;
       width: 100vw;
       height: 100vh;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      touch-action: none;
-      background: radial-gradient(circle at center, #161b33 0%, #090a16 100%);
-    }
-
-    #texto-ayuda {
       text-align: center;
       padding: 20px;
+      box-sizing: border-box;
       pointer-events: none;
     }
 
     #btn-iniciar {
-      margin-top: 15px;
-      padding: 18px 36px;
+      margin-top: 20px;
+      padding: 18px 32px;
       font-size: 18px;
       font-weight: bold;
       color: #090a16;
@@ -49,61 +63,65 @@
       border-radius: 30px;
       cursor: pointer;
       box-shadow: 0 0 20px rgba(100, 255, 218, 0.4);
-      z-index: 10;
+      pointer-events: auto;
     }
 
     #debug {
       position: fixed;
-      bottom: 10px;
-      left: 10px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.6);
-      padding: 8px;
+      bottom: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 3;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
       border-radius: 8px;
-      font-size: 12px;
+      font-size: 13px;
       font-family: monospace;
       color: #64ffda;
-      pointer-events: none;
       text-align: center;
+      pointer-events: none;
     }
 
     #luz {
-      position: absolute;
+      position: fixed;
       width: 55px;
       height: 55px;
       border-radius: 50%;
-      background: rgba(100, 255, 218, 0.75);
-      box-shadow: 0 0 35px 15px rgba(100, 255, 218, 0.35);
+      background: rgba(100, 255, 218, 0.85);
+      box-shadow: 0 0 35px 15px rgba(100, 255, 218, 0.45);
       transform: translate(-50%, -50%);
       pointer-events: none;
+      z-index: 2;
       display: none;
     }
   </style>
 </head>
 <body>
 
-  <div id="pad">
-    <div id="texto-ayuda">
-      <h2>Theremin Etéreo</h2>
-      <p id="instruccion">Pulsa el botón para activar el sonido</p>
-    </div>
-    <button id="btn-iniciar">Activar Sonido</button>
-    <div id="luz"></div>
+  <video id="video" playsinline muted autoplay></video>
+  <div id="luz"></div>
+
+  <div id="ui">
+    <h2 id="titulo">Theremin Etéreo</h2>
+    <p id="instruccion">Controla el sonido moviendo tu mano frente a la cámara</p>
+    <button id="btn-iniciar">Activar Cámara y Sonido</button>
   </div>
 
-  <div id="debug">Esperando botón...</div>
+  <div id="debug">Esperando que pulses el botón...</div>
 
   <script>
-    const pad = document.getElementById("pad");
+    const video = document.getElementById("video");
     const luz = document.getElementById("luz");
     const btnIniciar = document.getElementById("btn-iniciar");
     const instruccion = document.getElementById("instruccion");
+    const titulo = document.getElementById("titulo");
     const debug = document.getElementById("debug");
 
     let sinte, filtro, eco, reverb, limitador;
-    let audioListo = false;
     let tocando = false;
     let notaActual = "";
+    let ultimoTiempoConMano = 0;
+    let modeloListo = false;
 
     const notas = [
       "C3", "Eb3", "F3", "G3", "Bb3",
@@ -111,65 +129,27 @@
       "C5", "Eb5", "F5", "G5", "Bb5", "C6"
     ];
 
-    btnIniciar.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        await Tone.start();
-        await Tone.context.resume();
+    // --- 1. CONFIGURAR EL SINTETIZADOR ---
+    function iniciarAudio() {
+      if (sinte) return;
+      sinte = new Tone.Synth({
+        volume: -6,
+        oscillator: { type: "fattriangle", count: 3, spread: 20 },
+        envelope: { attack: 0.25, decay: 0.5, sustain: 0.8, release: 2.2 },
+        portamento: 0.12
+      });
 
-        if (!sinte) {
-          sinte = new Tone.Synth({
-            volume: -6, // Volumen equilibrado para no saturar
-            oscillator: {
-              type: "fattriangle",
-              count: 3,
-              spread: 20
-            },
-            envelope: {
-              attack: 0.25,
-              decay: 0.5,
-              sustain: 0.8,
-              release: 2.2
-            },
-            portamento: 0.12
-          });
+      filtro = new Tone.Filter(1000, "lowpass");
+      eco = new Tone.PingPongDelay({ delayTime: "8n.", feedback: 0.45, wet: 0.35 });
+      reverb = new Tone.JCReverb(0.45);
+      reverb.wet.value = 0.35;
+      limitador = new Tone.Limiter(-3);
 
-          filtro = new Tone.Filter(1000, "lowpass");
+      sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
+    }
 
-          eco = new Tone.PingPongDelay({
-            delayTime: "8n.",
-            feedback: 0.45,
-            wet: 0.35
-          });
-
-          // Usamos JCReverb (compatible con todos los celus) pero suavizada al 35%
-          reverb = new Tone.JCReverb(0.45);
-          reverb.wet.value = 0.35;
-
-          limitador = new Tone.Limiter(-3);
-
-          sinte.chain(filtro, eco, reverb, limitador, Tone.Destination);
-        }
-
-        // Nota suave de confirmación
-        sinte.triggerAttackRelease("C4", 0.3);
-
-        audioListo = true;
-        btnIniciar.style.display = "none";
-        instruccion.textContent = "Desliza el dedo (Izq/Der = Nota | Arriba/Abajo = Brillo)";
-        debug.textContent = "Audio: " + Tone.context.state + " | Listo para tocar";
-      } catch (err) {
-        debug.textContent = "ERROR: " + err.message;
-      }
-    });
-
-    function actualizarSonido(x, y) {
-      if (!audioListo) return;
-
-      const porcentajeX = Math.max(0, Math.min(1, x / window.innerWidth));
-      const porcentajeY = Math.max(0, Math.min(1, 1 - (y / window.innerHeight)));
-
-      const indice = Math.floor(porcentajeX * (notas.length - 1));
+    function actualizarSonido(xNorm, yNorm) {
+      const indice = Math.min(notas.length - 1, Math.floor(xNorm * notas.length));
       const nuevaNota = notas[indice];
 
       if (nuevaNota !== notaActual) {
@@ -181,39 +161,129 @@
         notaActual = nuevaNota;
       }
 
-      const frecuenciaFiltro = 250 + (porcentajeY * 2400);
+      const frecuenciaFiltro = 250 + (yNorm * 2400);
       filtro.frequency.rampTo(frecuenciaFiltro, 0.05);
 
-      luz.style.left = x + "px";
-      luz.style.top = y + "px";
-      debug.textContent = `Nota: ${notaActual} | Brillo: ${Math.round(frecuenciaFiltro)} Hz`;
+      // Posicionar la luz donde está la punta del dedo índice
+      luz.style.display = "block";
+      luz.style.left = (xNorm * window.innerWidth) + "px";
+      luz.style.top = ((1 - yNorm) * window.innerHeight) + "px";
+
+      debug.textContent = `Mano detectada | Nota: ${notaActual} | Brillo: ${Math.round(frecuenciaFiltro)} Hz`;
     }
 
-    pad.addEventListener("pointerdown", (e) => {
-      if (!audioListo) return;
-      document.getElementById("texto-ayuda").style.opacity = "0.25";
-      luz.style.display = "block";
-      actualizarSonido(e.clientX, e.clientY);
-      tocando = true;
-    });
-
-    pad.addEventListener("pointermove", (e) => {
-      if (!audioListo || !tocando) return;
-      actualizarSonido(e.clientX, e.clientY);
-    });
-
-    function detener() {
+    function detenerSonido() {
       if (!tocando) return;
       tocando = false;
       notaActual = "";
       sinte.triggerRelease();
       luz.style.display = "none";
-      debug.textContent = "En pausa (desliza para tocar)";
+      debug.textContent = "Muestra tu mano frente a la cámara para tocar";
     }
 
-    pad.addEventListener("pointerup", detener);
-    pad.addEventListener("pointerleave", detener);
-    pad.addEventListener("pointercancel", detener);
+    // --- 2. CONFIGURAR DETECTOR DE MANOS (MediaPipe) ---
+    let hands;
+    function iniciarMediaPipe() {
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 1,          // Solo 1 mano para máximo rendimiento en el celu
+        modelComplexity: 0,      // 0 = Modelo liviano (ideal para TCL 40)
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.5
+      });
+
+      hands.onResults((results) => {
+        if (!modeloListo) {
+          modeloListo = true;
+          debug.textContent = "¡Listo! Muestra tu mano frente a la cámara";
+        }
+
+        const ahora = performance.now();
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+          ultimoTiempoConMano = ahora;
+
+          // El punto 8 es la punta del dedo índice
+          const dedo = results.multiHandLandmarks[0][8];
+
+          // Invertimos X (espejo) e Y (arriba = 1, abajo = 0)
+          const xNorm = Math.max(0, Math.min(1, 1 - dedo.x));
+          const yNorm = Math.max(0, Math.min(1, 1 - dedo.y));
+
+          actualizarSonido(xNorm, yNorm);
+          tocando = true;
+        } else {
+          // Solo cortamos si pasaron más de 300ms sin ver la mano
+          if (tocando && (ahora - ultimoTiempoConMano > 300)) {
+            detenerSonido();
+          }
+        }
+      });
+    }
+
+    // --- 3. BUCLE DE VIDEO ---
+    let procesando = false;
+    async function bucleCamara() {
+      if (video.readyState >= 2 && !procesando) {
+        procesando = true;
+        try {
+          await hands.send({ image: video });
+        } catch (err) {
+          debug.textContent = "Error detectando mano: " + err.message;
+        }
+        procesando = false;
+      }
+      requestAnimationFrame(bucleCamara);
+    }
+
+    // --- 4. BOTÓN DE INICIO ---
+    btnIniciar.addEventListener("click", async () => {
+      try {
+        btnIniciar.disabled = true;
+        btnIniciar.textContent = "Iniciando...";
+        debug.textContent = "Activando audio y pidiendo permiso de cámara...";
+
+        await Tone.start();
+        await Tone.context.resume();
+        iniciarAudio();
+        sinte.triggerAttackRelease("C4", 0.25); // Sonido de confirmación
+
+        if (typeof Hands === "undefined") {
+          throw new Error("No se cargó la librería MediaPipe Hands.");
+        }
+
+        iniciarMediaPipe();
+
+        // Pedimos la cámara frontal en baja resolución para que vaya fluido
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: { ideal: 320 },
+            height: { ideal: 240 }
+          },
+          audio: false
+        });
+
+        video.srcObject = stream;
+        video.style.display = "block";
+        await video.play();
+
+        btnIniciar.style.display = "none";
+        titulo.style.opacity = "0.25";
+        instruccion.style.opacity = "0.25";
+        instruccion.textContent = "Mueve tu dedo índice en el aire";
+        debug.textContent = "Cargando inteligencia artificial (espera unos segundos)...";
+
+        bucleCamara();
+      } catch (err) {
+        btnIniciar.disabled = false;
+        btnIniciar.textContent = "Reintentar";
+        debug.textContent = "ERROR: " + err.message;
+      }
+    });
   </script>
 </body>
 </html>
